@@ -108,6 +108,36 @@ export type KanbanTaskInsert = Omit<
   "id" | "created_at" | "position"
 > & { position?: number };
 
+export type ChatRole = "user" | "assistant";
+
+export type NoteTag = "Harian" | "Evaluasi" | "Ide Freelance" | "Target" | "Lainnya";
+
+export type ChatMessage = {
+  id: string;
+  role: ChatRole;
+  content: string;
+  created_at: string;
+};
+
+export type DailyNote = {
+  id: string;
+  title: string;
+  content: string;
+  tag: NoteTag;
+  note_date: string;
+  is_pinned: boolean;
+  position: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ChatMessageInsert = Omit<ChatMessage, "id" | "created_at">;
+
+export type DailyNoteInsert = Omit<
+  DailyNote,
+  "id" | "created_at" | "updated_at" | "position"
+> & { position?: number };
+
 export type DailyAuditInsert = Omit<
   DailyAudit,
   "id" | "created_at" | "evening_audit_done" | "monday_split_done" | "notes"
@@ -123,6 +153,8 @@ export const REALTIME_TABLES = [
   "transactions",
   "kanban_tasks",
   "daily_audits",
+  "chat_messages",
+  "daily_notes",
 ] as const;
 
 export type RealtimeTable = (typeof REALTIME_TABLES)[number];
@@ -179,6 +211,18 @@ export interface Database {
         Row: DailyAudit;
         Insert: DailyAuditInsert;
         Update: Partial<DailyAuditInsert>;
+        Relationships: [];
+      };
+      chat_messages: {
+        Row: ChatMessage;
+        Insert: ChatMessageInsert;
+        Update: Partial<ChatMessageInsert>;
+        Relationships: [];
+      };
+      daily_notes: {
+        Row: DailyNote;
+        Insert: DailyNoteInsert;
+        Update: Partial<DailyNoteInsert>;
         Relationships: [];
       };
     };

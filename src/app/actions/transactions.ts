@@ -76,6 +76,24 @@ function readOptionalText(formData: FormData, key: string): string | null {
   return value.length > 0 ? value : null;
 }
 
+/**
+ * Parse a boolean from FormData.
+ *
+ * An unchecked HTML checkbox is OMITTED from the submission entirely, so
+ * `formData.get()` returns `null`. Defaulting that `null` to a truthy value
+ * (the old `?? "on"` bug) made it impossible to ever submit `false`.
+ *
+ * The freelance form now also sends an explicit hidden `"true"`/`"false"`
+ * string, so every accepted truthy spelling is listed and anything else —
+ * including `null`, `""`, and the string `"false"` — reads as `false`.
+ */
+function readBoolean(formData: FormData, key: string): boolean {
+  const raw = formData.get(key);
+  if (typeof raw !== "string") return false;
+  const value = raw.trim().toLowerCase();
+  return value === "true" || value === "on" || value === "1" || value === "yes";
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    EXPENSE
    ───────────────────────────────────────────────────────────────────────────── */
@@ -271,7 +289,9 @@ export async function createFreelanceIncomeAction(
   const barang = readText(formData, "barang_keperluan");
   const nominal = readNominal(formData);
   const client = readOptionalText(formData, "client");
-  const freeze = String(formData.get("freeze") ?? "on") === "on";
+  // Strictly the submitted boolean. No implicit default — unchecking the box
+  // must persist `is_frozen_freelance = false`.
+  const freeze = readBoolean(formData, "freeze");
 
   if (barang.length === 0) {
     return { ok: false, error: "Nama proyek wajib diisi.", field: "barang_keperluan" };
@@ -327,7 +347,64 @@ export async function createFreelanceIncomeAction(
       data: { id: data.id, unlockDate },
       message: freeze
         ? `Proyek dicatat dan dibekukan sampai ${unlockDate}.`
-        : "Proyek freelance dicatat tanpa pembekuan.",
+        : "Proyek freelance dicatat tanpa pembekuan — dana langsung aktif/likuid.",
+    };
+  } catch (error) {
+    return { ok: false, error: translateDbError(error) };
+  }
+}
+
+/**
+ * Toggle the freeze flag on an existing freelance row ("Lepas Beku" / "Bekukan").
+ *
+ * This only flips `is_frozen_freelance`; it does NOT move money. Unfreezing
+ * makes the amount count as active/liquid freelance income immediately and
+ * removes it from the FREELANCE BEKU total.
+ *
+ * Use `unlockFreelanceAction` instead when the 70:30 split should actually be
+ * booked as ledger transfers.
+ */
+export async function setFreelanceFreezeAction(
+  transactionId: string,
+  frozen: boolean,
+): Promise<ActionResult<{ frozen: boolean }>> {
+  await requireSession();
+
+  if (transactionId.length === 0) {
+    return { ok: false, error: "ID transaksi tidak valid." };
+  }
+
+  try {
+    const supabase = createServiceClient();
+
+    const { data: tx, error: readError } = await supabase
+      .from("transactions")
+      .select("tx_type, barang_keperluan")
+      .eq("id", transactionId)
+      .single();
+
+    if (readError) throw new Error(readError.message);
+    if (tx.tx_type !== "income_freelance") {
+      return {
+        ok: false,
+        error: "Hanya transaksi pemasukan freelance yang bisa dibekukan.",
+      };
+    }
+
+    const { error } = await supabase
+      .from("transactions")
+      .update({ is_frozen_freelance: frozen })
+      .eq("id", transactionId);
+
+    if (error) throw new Error(error.message);
+
+    revalidateAll();
+    return {
+      ok: true,
+      data: { frozen },
+      message: frozen
+        ? `"${tx.barang_keperluan}" dibekukan kembali.`
+        : `"${tx.barang_keperluan}" dilepas dari pembekuan — dana kini aktif/likuid.`,
     };
   } catch (error) {
     return { ok: false, error: translateDbError(error) };

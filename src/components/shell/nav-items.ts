@@ -5,7 +5,9 @@ import {
   BookOpen,
   KanbanSquare,
   LayoutGrid,
+  NotebookPen,
   ScrollText,
+  Sparkles,
   Wallet as WalletIcon,
 } from "lucide-react";
 
@@ -68,6 +70,20 @@ export const NAV_ITEMS: readonly NavItem[] = [
     code: "07",
     Icon: BookOpen,
     description: "Audit malam 21:00 dan streak disiplin.",
+  },
+  {
+    href: "/assisten",
+    label: "Assisten AI",
+    code: "08",
+    Icon: Sparkles,
+    description: "Tanya kondisi keuangan ke asisten Gemini.",
+  },
+  {
+    href: "/catatan",
+    label: "Catatan Harian",
+    code: "09",
+    Icon: NotebookPen,
+    description: "Canvas catatan harian tanpa batas.",
   },
 ] as const;
 

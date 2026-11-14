@@ -5,6 +5,7 @@ import * as React from "react";
 
 import {
   createFreelanceIncomeAction,
+  setFreelanceFreezeAction,
   unlockFreelanceAction,
 } from "@/app/actions/transactions";
 import { Button, MotionButton } from "@/components/ui/button";
@@ -50,6 +51,9 @@ export function FreelanceForm({
   today: string;
 }) {
   const [nominal, setNominal] = React.useState("");
+  // Controlled freeze flag. Defaults to true (the SOP default) but is now
+  // genuinely toggleable — see the hidden input in the form below.
+  const [freeze, setFreeze] = React.useState(true);
   const [pending, setPending] = React.useState(false);
   const [feedback, setFeedback] = React.useState<
     { tone: "ok" | "error"; message: string } | null
@@ -83,6 +87,7 @@ export function FreelanceForm({
       setFeedback({ tone: "ok", message: result.message ?? "Tersimpan." });
       formRef.current?.reset();
       setNominal("");
+      setFreeze(true);
     } else {
       setFeedback({ tone: "error", message: result.error });
     }
@@ -175,27 +180,54 @@ export function FreelanceForm({
                   />
                 </Field>
 
+                {/*
+                  Controlled freeze toggle.
+
+                  An unchecked checkbox is omitted from FormData entirely, so a
+                  bare checkbox can never submit `false`. The hidden input below
+                  always sends an explicit "true"/"false" string, and the visible
+                  checkbox carries no `name` — it only drives React state.
+                */}
+                <input type="hidden" name="freeze" value={freeze ? "true" : "false"} />
+
                 <label
                   htmlFor="fl-freeze"
-                  className="flex cursor-pointer items-start gap-3 border border-warning bg-surface px-3 py-3"
+                  className={`flex cursor-pointer items-start gap-3 border bg-surface px-3 py-3 transition-colors ${
+                    freeze ? "border-warning" : "border-border"
+                  }`}
                 >
                   <input
                     id="fl-freeze"
-                    name="freeze"
                     type="checkbox"
-                    defaultChecked
+                    checked={freeze}
+                    onChange={(event) => setFreeze(event.target.checked)}
                     className="mt-0.5 h-3.5 w-3.5 shrink-0 appearance-none border border-border-strong bg-background checked:border-warning checked:bg-warning"
                   />
                   <span className="min-w-0">
                     <span className="flex items-center gap-2">
-                      <Snowflake className="size-3.5 shrink-0 text-warning" />
+                      <Snowflake
+                        className={`size-3.5 shrink-0 ${
+                          freeze ? "text-warning" : "text-muted-foreground"
+                        }`}
+                      />
                       <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-foreground">
                         Bekukan Sampai Tanggal 1
                       </span>
                     </span>
                     <span className="mt-1.5 block text-[12px] leading-relaxed text-muted-foreground">
-                      Dana masuk ke Kantong Freelance tetapi ditandai beku. Tidak boleh
-                      dipakai sebelum {formatDateShort(firstOfNextMonth(today))}.
+                      {freeze ? (
+                        <>
+                          Dana masuk ke Kantong Freelance tetapi ditandai beku. Tidak
+                          boleh dipakai sebelum{" "}
+                          {formatDateShort(firstOfNextMonth(today))}.
+                        </>
+                      ) : (
+                        <>
+                          Pembekuan nonaktif. Dana langsung dihitung sebagai pemasukan
+                          freelance aktif/likuid dan tidak masuk total{" "}
+                          <span className="font-mono text-foreground">Freelance Beku</span>.
+                        </>
+                      )}
                     </span>
                   </span>
                 </label>
@@ -225,7 +257,10 @@ export function FreelanceForm({
                     type="reset"
                     variant="outline"
                     size="sm"
-                    onClick={() => setNominal("")}
+                    onClick={() => {
+                      setNominal("");
+                      setFreeze(true);
+                    }}
                   >
                     Batal
                   </Button>
@@ -384,7 +419,7 @@ export function FreelanceForm({
 }
 
 function FreelanceRow({ tx, today }: { tx: Transaction; today: string }) {
-  const [pending, setPending] = React.useState(false);
+  const [pending, setPending] = React.useState<"split" | "toggle" | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   const unlockDate = firstOfNextMonth(tx.tanggal);
@@ -394,11 +429,24 @@ function FreelanceRow({ tx, today }: { tx: Transaction; today: string }) {
   const unlockable = tx.is_frozen_freelance && today >= unlockDate;
   const split = splitFreelance(tx.nominal);
 
+  /** Book the 70:30 split as real ledger transfers. */
   async function onUnlock() {
-    setPending(true);
+    setPending("split");
     setError(null);
     const result = await unlockFreelanceAction(tx.id);
-    setPending(false);
+    setPending(null);
+    if (!result.ok) setError(result.error);
+  }
+
+  /**
+   * Flip the freeze flag only — no money moves. Lets the user release funds on
+   * the 1st (or any time) so the amount stops counting as FREELANCE BEKU.
+   */
+  async function onToggleFreeze() {
+    setPending("toggle");
+    setError(null);
+    const result = await setFreelanceFreezeAction(tx.id, !tx.is_frozen_freelance);
+    setPending(null);
     if (!result.ok) setError(result.error);
   }
 
@@ -459,32 +507,68 @@ function FreelanceRow({ tx, today }: { tx: Transaction; today: string }) {
             </p>
           </div>
 
-          {tx.is_frozen_freelance && (
-            <MotionButton
+          {/*
+            Adjacent-button rule: at most one accent fill. "Pecah 70:30" takes
+            the accent when actionable; the freeze toggle stays monochrome.
+          */}
+          <div className="flex flex-wrap items-center gap-2">
+            {tx.is_frozen_freelance && (
+              <MotionButton
+                type="button"
+                variant={unlockable ? "accent" : "outline"}
+                size="sm"
+                disabled={!unlockable || pending !== null}
+                onClick={onUnlock}
+                title={
+                  unlockable
+                    ? "Lepas dana dan pecah 70:30 ke Tabungan & Investasi"
+                    : `Masih dibekukan sampai ${formatDateShort(unlockDate)}`
+                }
+              >
+                {pending === "split" ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Memproses
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="size-3.5" />
+                    Pecah 70:30
+                  </>
+                )}
+              </MotionButton>
+            )}
+
+            <Button
               type="button"
-              variant={unlockable ? "accent" : "outline"}
+              variant="outline"
               size="sm"
-              disabled={!unlockable || pending}
-              onClick={onUnlock}
+              disabled={pending !== null}
+              onClick={onToggleFreeze}
               title={
-                unlockable
-                  ? "Lepas dana dan pecah 70:30"
-                  : `Masih dibekukan sampai ${formatDateShort(unlockDate)}`
+                tx.is_frozen_freelance
+                  ? "Tandai cair tanpa memindahkan dana — keluar dari total Freelance Beku"
+                  : "Bekukan kembali dana ini"
               }
             >
-              {pending ? (
+              {pending === "toggle" ? (
                 <>
                   <Loader2 className="size-3.5 animate-spin" />
                   Memproses
                 </>
-              ) : (
+              ) : tx.is_frozen_freelance ? (
                 <>
                   <Unlock className="size-3.5" />
-                  Pecah 70:30
+                  Lepas Beku
+                </>
+              ) : (
+                <>
+                  <Snowflake className="size-3.5" />
+                  Bekukan
                 </>
               )}
-            </MotionButton>
-          )}
+            </Button>
+          </div>
         </div>
       </div>
     </li>
