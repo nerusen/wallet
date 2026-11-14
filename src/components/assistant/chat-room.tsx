@@ -1,22 +1,34 @@
 "use client";
 
 import {
+  AlertTriangle,
   Check,
   Copy,
   FileText,
   ImageIcon,
   Loader2,
   Plus,
+  RefreshCw,
   RotateCcw,
   Send,
+  X,
 } from "lucide-react";
 import * as React from "react";
 
 import { resetChatAction } from "@/app/actions/assistant";
+import { ModelSelector } from "@/components/assistant/model-selector";
 import { Button, MotionButton } from "@/components/ui/button";
 import { Reveal } from "@/components/ui/motion";
 import { Badge } from "@/components/ui/panel";
 import { useRealtimeRefresh } from "@/hooks/use-realtime-refresh";
+import { ASSISTANT_ERROR_COPY } from "@/lib/assistant/errors";
+import {
+  DEFAULT_GEMINI_MODEL,
+  MODEL_STORAGE_KEY,
+  isGeminiModelId,
+  modelLabel,
+  type GeminiModelId,
+} from "@/lib/assistant/models";
 import { cn, tempId } from "@/lib/utils";
 import type { ChatMessage } from "@/lib/types/database";
 
@@ -66,28 +78,46 @@ interface Group {
   messages: ChatMessage[];
 }
 
-/** Local-only placeholder for the in-flight assistant turn. */
+/** Local-only marker for the in-flight assistant turn. */
 interface PendingTurn {
-  user: ChatMessage;
+  text: string;
+}
+
+/** Structured, already-humanised error shown above the composer. */
+interface ChatAlert {
+  message: string;
+  /** The user text to resend when "Coba Lagi" is pressed. */
+  retryText: string;
+  /**
+   * True only when the user's row is already persisted, so a retry re-runs
+   * generation without inserting a duplicate message.
+   */
+  canRetry: boolean;
 }
 
 export function ChatRoom({
   initialMessages,
   hasApiKey,
   todayKey,
-  model,
+  envModel,
 }: {
   initialMessages: readonly ChatMessage[];
   hasApiKey: boolean;
   todayKey: string;
-  model: string;
+  /** Server-side GEMINI_MODEL, used only as the pre-hydration label. */
+  envModel: string;
 }) {
   const [messages, setMessages] = React.useState<ChatMessage[]>([...initialMessages]);
   const [draft, setDraft] = React.useState("");
   const [pending, setPending] = React.useState<PendingTurn | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  const [alert, setAlert] = React.useState<ChatAlert | null>(null);
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [resetting, setResetting] = React.useState(false);
+  const [selectedModel, setSelectedModel] =
+    React.useState<GeminiModelId>(DEFAULT_GEMINI_MODEL);
+  const [hydrated, setHydrated] = React.useState(false);
+  /** usedModel per assistant message id, for the FALLBACK badge. */
+  const [fallbackBy, setFallbackBy] = React.useState<Record<string, string>>({});
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
@@ -100,6 +130,18 @@ export function ChatRoom({
   React.useEffect(() => {
     setMessages([...initialMessages]);
   }, [initialMessages]);
+
+  // Restore the persisted model after mount so SSR stays deterministic.
+  React.useEffect(() => {
+    const stored = window.localStorage.getItem(MODEL_STORAGE_KEY);
+    if (isGeminiModelId(stored)) setSelectedModel(stored);
+    setHydrated(true);
+  }, []);
+
+  const pickModel = React.useCallback((next: GeminiModelId) => {
+    setSelectedModel(next);
+    window.localStorage.setItem(MODEL_STORAGE_KEY, next);
+  }, []);
 
   // Keep the viewport pinned to the newest turn.
   React.useEffect(() => {
@@ -133,54 +175,124 @@ export function ChatRoom({
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }
 
-  async function send() {
-    const text = draft.trim();
-    if (text.length === 0 || pending !== null || !hasApiKey) return;
+  /**
+   * Send a turn to the assistant.
+   *
+   * `mode: "retry"` re-generates the LAST unanswered user message. The row is
+   * already persisted, so `reuseLastUserMessage` tells the server to skip the
+   * insert — no duplicate ever lands in `chat_messages`.
+   */
+  async function send(
+    text: string,
+    mode: "new" | "retry" = "new",
+  ): Promise<void> {
+    const body = text.trim();
+    if (body.length === 0 || pending !== null || !hasApiKey) return;
 
-    const optimisticUser: ChatMessage = {
-      id: tempId("usr"),
-      role: "user",
-      content: text,
-      created_at: new Date().toISOString(),
-    };
+    const isRetry = mode === "retry";
 
-    setMessages((prev) => [...prev, optimisticUser]);
-    setPending({ user: optimisticUser });
-    setDraft("");
-    setError(null);
-    if (textareaRef.current !== null) textareaRef.current.style.height = "auto";
+    // A new turn gets an optimistic bubble; a retry already has its bubble.
+    const optimistic: ChatMessage | null = isRetry
+      ? null
+      : {
+          id: tempId("usr"),
+          role: "user",
+          content: body,
+          created_at: new Date().toISOString(),
+        };
+
+    if (optimistic !== null) {
+      setMessages((prev) => [...prev, optimistic]);
+      setDraft("");
+      if (textareaRef.current !== null) textareaRef.current.style.height = "auto";
+    }
+
+    setPending({ text: body });
+    setAlert(null);
 
     try {
       const response = await fetch("/api/assistant/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({
+          message: body,
+          selectedModel,
+          reuseLastUserMessage: isRetry,
+        }),
       });
 
       const payload: unknown = await response.json();
       const data = payload as {
         ok?: boolean;
         error?: string;
-        userMessage?: ChatMessage;
+        code?: string;
+        userMessage?: ChatMessage | null;
         assistantMessage?: ChatMessage;
+        usedModel?: string;
+        isFallback?: boolean;
       };
 
-      if (data.ok === true && data.userMessage && data.assistantMessage) {
-        // Swap the optimistic row for the persisted pair.
-        setMessages((prev) => [
-          ...prev.filter((m) => m.id !== optimisticUser.id),
-          data.userMessage as ChatMessage,
-          data.assistantMessage as ChatMessage,
-        ]);
+      if (data.ok === true && data.assistantMessage) {
+        const assistant = data.assistantMessage;
+
+        setMessages((prev) => {
+          const base =
+            optimistic === null
+              ? prev
+              : prev.filter((m) => m.id !== optimistic.id);
+          // On retry the user row is already in the list.
+          const withUser =
+            data.userMessage != null ? [...base, data.userMessage] : base;
+          return [...withUser, assistant];
+        });
+
+        if (data.isFallback === true && typeof data.usedModel === "string") {
+          const used = data.usedModel;
+          setFallbackBy((prev) => ({ ...prev, [assistant.id]: used }));
+        }
       } else {
-        setMessages((prev) => prev.filter((m) => m.id !== optimisticUser.id));
-        setDraft(text);
-        setError(data.error ?? "Gagal mengirim pesan.");
+        /*
+          The route persists the user's row BEFORE calling the model, so a
+          model failure still leaves that row stored and returns it as
+          `userMessage`. In that case keep the bubble on screen (swapping the
+          optimistic id for the persisted one) and offer "Coba Lagi", which
+          regenerates without inserting a second row.
+
+          Only when nothing was persisted (validation rejected, auth failed, or
+          a retry attempt) is the bubble rolled back and the text returned to
+          the composer.
+        */
+        const persisted = data.userMessage ?? null;
+
+        if (persisted !== null && optimistic !== null) {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === optimistic.id ? persisted : m)),
+          );
+        } else if (optimistic !== null) {
+          setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+          setDraft(body);
+        }
+
+        setAlert({
+          message: data.error ?? ASSISTANT_ERROR_COPY.unknown,
+          retryText: body,
+          // Retryable whenever the user's row is already in the transcript.
+          canRetry: isRetry || persisted !== null,
+        });
       }
     } catch {
-      setMessages((prev) => prev.filter((m) => m.id !== optimisticUser.id));
-      setDraft(text);
-      setError("Koneksi gagal. Periksa jaringan lalu coba lagi.");
+      // Network failure: the request may or may not have reached the server, so
+      // the optimistic bubble is rolled back and the text is restored. Retry
+      // then happens by resending from the composer.
+      if (optimistic !== null) {
+        setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+        setDraft(body);
+      }
+      setAlert({
+        message: ASSISTANT_ERROR_COPY.network,
+        retryText: body,
+        canRetry: isRetry,
+      });
     } finally {
       setPending(null);
     }
@@ -188,11 +300,15 @@ export function ChatRoom({
 
   async function onReset() {
     setResetting(true);
-    setError(null);
+    setAlert(null);
     const result = await resetChatAction();
     setResetting(false);
-    if (result.ok) setMessages([]);
-    else setError(result.error);
+    if (result.ok) {
+      setMessages([]);
+      setFallbackBy({});
+    } else {
+      setAlert({ message: result.error, retryText: "", canRetry: false });
+    }
   }
 
   const groups = React.useMemo<Group[]>(() => {
@@ -222,11 +338,32 @@ export function ChatRoom({
             className="status-dot"
             data-tone={hasApiKey ? "success" : "danger"}
           />
-          <span className="truncate font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-            {hasApiKey ? model : "API key belum diset"}
-          </span>
+
+          {hasApiKey ? (
+            // Pre-hydration the env model label is shown so SSR and the first
+            // client paint agree; the stored selection takes over on mount.
+            hydrated ? (
+              <ModelSelector
+                value={selectedModel}
+                onChange={pickModel}
+                disabled={pending !== null}
+              />
+            ) : (
+              <span className="flex items-center gap-2 border border-border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                <span aria-hidden className="h-1.5 w-1.5 bg-accent" />
+                {modelLabel(envModel)}
+              </span>
+            )
+          ) : (
+            <span className="truncate font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+              API key belum diset
+            </span>
+          )}
+
           {messages.length > 0 && (
-            <Badge tone="neutral">{messages.length} pesan</Badge>
+            <Badge tone="neutral" className="hidden sm:inline-flex">
+              {messages.length} pesan
+            </Badge>
           )}
         </div>
 
@@ -267,7 +404,11 @@ export function ChatRoom({
                   message.role === "user" ? (
                     <UserBubble key={message.id} message={message} />
                   ) : (
-                    <AssistantMessage key={message.id} message={message} />
+                    <AssistantMessage
+                      key={message.id}
+                      message={message}
+                      fallbackModel={fallbackBy[message.id]}
+                    />
                   ),
                 )}
               </section>
@@ -278,14 +419,46 @@ export function ChatRoom({
         )}
       </div>
 
-      {/* ── Error strip ── */}
-      {error !== null && (
-        <p
+      {/* ── Error alert: 1px #EF4444 frame, above the composer ── */}
+      {alert !== null && (
+        <div
           role="alert"
-          className="shrink-0 border-t border-danger bg-surface px-4 py-2 font-mono text-[11px] leading-relaxed text-danger"
+          className="mx-3 mb-0 mt-3 shrink-0 border border-danger bg-surface sm:mx-4"
         >
-          {error}
-        </p>
+          <div className="flex flex-col gap-2.5 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-start gap-2.5">
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-danger" />
+              <p className="min-w-0 text-[12px] leading-relaxed text-foreground">
+                {alert.message}
+              </p>
+            </div>
+
+            <div className="flex shrink-0 items-center gap-2">
+              {alert.canRetry && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  disabled={pending !== null}
+                  onClick={() => void send(alert.retryText, "retry")}
+                  title="Hasilkan ulang jawaban untuk pesan terakhir"
+                >
+                  <RefreshCw className="size-3" />
+                  Coba Lagi
+                </Button>
+              )}
+              <button
+                type="button"
+                onClick={() => setAlert(null)}
+                aria-label="Tutup peringatan"
+                title="Tutup"
+                className="flex h-7 w-7 items-center justify-center border border-border text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Composer ── */}
@@ -360,7 +533,7 @@ export function ChatRoom({
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                void send();
+                void send(draft);
               }
             }}
             rows={1}
@@ -383,7 +556,7 @@ export function ChatRoom({
             variant="accent"
             size="icon"
             disabled={!hasApiKey || pending !== null || draft.trim().length === 0}
-            onClick={() => void send()}
+            onClick={() => void send(draft)}
             aria-label="Kirim pesan"
             title="Kirim"
             className="shrink-0"
@@ -431,7 +604,14 @@ function UserBubble({ message }: { message: ChatMessage }) {
 }
 
 /** No bubble: the AI reply sits directly on the canvas, left-aligned. */
-function AssistantMessage({ message }: { message: ChatMessage }) {
+function AssistantMessage({
+  message,
+  fallbackModel,
+}: {
+  message: ChatMessage;
+  /** Set only when a fallback model produced this answer. */
+  fallbackModel?: string;
+}) {
   const [copied, setCopied] = React.useState(false);
 
   async function copy() {
@@ -449,10 +629,19 @@ function AssistantMessage({ message }: { message: ChatMessage }) {
       <div className="whitespace-pre-wrap text-left text-[13px] leading-relaxed text-foreground">
         {message.content}
       </div>
-      <div className="mt-1.5 flex items-center gap-2">
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
         <span className="font-mono text-[11px] text-muted-foreground tabular">
           {timeLabel(message.created_at)}
         </span>
+
+        {fallbackModel !== undefined && (
+          <span
+            className="border border-warning px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-warning"
+            title={`Jawaban ini dihasilkan oleh model cadangan ${modelLabel(fallbackModel)}`}
+          >
+            Fallback · {modelLabel(fallbackModel)}
+          </span>
+        )}
         <button
           type="button"
           onClick={() => void copy()}

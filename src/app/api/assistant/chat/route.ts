@@ -5,6 +5,7 @@ import {
   fetchRecentChatMessages,
   insertChatMessage,
 } from "@/lib/assistant/chat-store";
+import { ASSISTANT_ERROR_COPY } from "@/lib/assistant/errors";
 import {
   HISTORY_TURNS,
   MAX_USER_MESSAGE_LENGTH,
@@ -12,22 +13,28 @@ import {
   getGeminiModel,
   loadSystemInstruction,
 } from "@/lib/assistant/gemini";
+import {
+  generateWithFallback,
+  type GeminiContent,
+} from "@/lib/assistant/generate";
+import { buildFallbackQueue, isGeminiModelId } from "@/lib/assistant/models";
 import { buildFinancialSnapshot } from "@/lib/assistant/snapshot";
-import { errorMessage } from "@/lib/utils";
 import type { ChatMessage } from "@/lib/types/database";
 
 /**
  * POST /api/assistant/chat
  *
- * Reactive only: one explicit user message in, one assistant reply out. There
- * is no background/scheduled invocation anywhere in the codebase.
+ * Reactive only: one explicit user message in, one assistant reply out. No
+ * background or scheduled invocation exists anywhere in the codebase.
  *
  * Flow:
  *   1. Require a valid session (single-user auth).
- *   2. Validate the message, then persist it to `chat_messages`.
- *   3. Build a read-only financial snapshot + replay recent turns.
- *   4. Call Gemini with `intruksi.md` as the systemInstruction.
- *   5. Persist and return the reply.
+ *   2. Validate input and resolve the model fallback queue.
+ *   3. Persist the user's message — unless `reuseLastUserMessage` is set, which
+ *      the "Coba Lagi" retry uses so a retry never duplicates the row.
+ *   4. Build the read-only financial snapshot and replay recent turns.
+ *   5. Call Gemini through the retry + fallback chain.
+ *   6. Persist the reply and return `{ usedModel, isFallback }`.
  *
  * Runs on the Node runtime because it reads `intruksi.md` from disk.
  */
@@ -36,6 +43,12 @@ export const dynamic = "force-dynamic";
 
 interface ChatRequestBody {
   message?: unknown;
+  selectedModel?: unknown;
+  /**
+   * Retry mode. The user's message is already stored, so re-send it to the
+   * model without inserting a duplicate `chat_messages` row.
+   */
+  reuseLastUserMessage?: unknown;
 }
 
 export async function POST(request: Request) {
@@ -48,21 +61,16 @@ export async function POST(request: Request) {
     );
   }
 
-  // ── 2. API key present? ──
+  // ── 2. API key ──
   const apiKey = getGeminiApiKey();
   if (apiKey === null) {
     return NextResponse.json(
-      {
-        ok: false,
-        error:
-          "NO APIKEY AVAILABLE — setel GEMINI_API_KEY di .env.local atau Vercel Environment Variables.",
-        code: "NO_API_KEY",
-      },
+      { ok: false, error: ASSISTANT_ERROR_COPY.no_api_key, code: "NO_API_KEY" },
       { status: 503 },
     );
   }
 
-  // ── 3. Validate input ──
+  // ── 3. Parse + validate ──
   let body: ChatRequestBody;
   try {
     body = (await request.json()) as ChatRequestBody;
@@ -90,87 +98,116 @@ export async function POST(request: Request) {
     );
   }
 
+  /*
+    Model resolution. An unrecognised client value is ignored rather than
+    trusted — the request body is user input, and forwarding an arbitrary
+    string to the provider would turn a typo into a 404 from Google.
+  */
+  const selectedModel = isGeminiModelId(body.selectedModel)
+    ? body.selectedModel
+    : getGeminiModel();
+  const queue = buildFallbackQueue(selectedModel);
+  const reuse = body.reuseLastUserMessage === true;
+
   try {
-    // ── 4. Replay history BEFORE saving, so the new message is not duplicated ──
+    // ── 4. History (read before inserting, so the new turn isn't echoed) ──
     const history: ChatMessage[] = await fetchRecentChatMessages(HISTORY_TURNS);
 
-    // ── 5. Persist the user's message ──
-    const userMessage = await insertChatMessage("user", raw);
+    /*
+      On retry the user's row already exists; `history` therefore already ends
+      with it. Drop that trailing turn so the message is not sent twice — once
+      as history and once as the live prompt.
+    */
+    const replayHistory =
+      reuse &&
+      history.length > 0 &&
+      history[history.length - 1]?.role === "user" &&
+      history[history.length - 1]?.content === raw
+        ? history.slice(0, -1)
+        : history;
+
+    // ── 5. Persist the user's message (skipped on retry) ──
+    const userMessage = reuse ? null : await insertChatMessage("user", raw);
 
     // ── 6. Read-only financial context ──
-    const snapshot = await buildFinancialSnapshot(history);
-
-    // ── 7. Call Gemini ──
+    const snapshot = await buildFinancialSnapshot(replayHistory);
     const { instruction } = await loadSystemInstruction();
-    const model = getGeminiModel();
-
-    // Imported lazily so a missing/incompatible SDK cannot break unrelated
-    // routes at module-eval time.
-    const { GoogleGenAI, ThinkingLevel } = await import("@google/genai");
-    const ai = new GoogleGenAI({ apiKey });
 
     const contextBlock =
       snapshot.error === null
         ? snapshot.text
         : `PERINGATAN: snapshot keuangan gagal dimuat (${snapshot.error}). Katakan ke pengguna bahwa data finansial sedang tidak dapat dibaca, dan jangan mengarang angka.`;
 
-    const contents = [
-      ...history.map((m) => ({
+    const contents: GeminiContent[] = [
+      ...replayHistory.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
         parts: [{ text: m.content }],
       })),
       {
         role: "user",
-        parts: [
-          {
-            text: `${contextBlock}\n\n---\n\nPERTANYAAN PENGGUNA:\n${raw}`,
-          },
-        ],
+        parts: [{ text: `${contextBlock}\n\n---\n\nPERTANYAAN PENGGUNA:\n${raw}` }],
       },
     ];
 
-    const response = await ai.models.generateContent({
-      model,
+    // ── 7. Retry + fallback chain ──
+    const result = await generateWithFallback({
+      apiKey,
+      queue,
       contents,
-      config: {
-        systemInstruction: instruction,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
-        temperature: 0.4,
-        maxOutputTokens: 1400,
-      },
+      systemInstruction: instruction,
     });
 
-    const reply = (response.text ?? "").trim();
-    if (reply.length === 0) {
+    if (!result.ok) {
+      // Clean Indonesian copy only — never the provider payload.
       return NextResponse.json(
         {
           ok: false,
-          error: "Model tidak mengembalikan jawaban. Coba kirim ulang pesanmu.",
+          error: result.error.message,
+          code: result.error.kind,
+          retryable: result.error.retryable,
           userMessage,
+          attempts: result.attempts,
         },
-        { status: 502 },
+        { status: result.error.status },
       );
     }
 
     // ── 8. Persist and return ──
-    const assistantMessage = await insertChatMessage("assistant", reply);
+    const assistantMessage = await insertChatMessage("assistant", result.text);
 
     return NextResponse.json({
       ok: true,
       userMessage,
       assistantMessage,
-      meta: { model, snapshotOk: snapshot.error === null },
+      usedModel: result.usedModel,
+      isFallback: result.isFallback,
+      meta: {
+        requestedModel: selectedModel,
+        queue,
+        attempts: result.attempts,
+        snapshotOk: snapshot.error === null,
+      },
     });
   } catch (error) {
+    /*
+      Reached only for infrastructure failures outside the model call (e.g.
+      Supabase unavailable). The model path maps its own errors inside
+      `generateWithFallback`.
+    */
+    const detail =
+      error instanceof Error && error.message.length > 0 ? error.message : null;
+
     return NextResponse.json(
       {
         ok: false,
-        error: errorMessage(
-          error,
-          "Gagal menghubungi asisten. Periksa GEMINI_API_KEY dan koneksi jaringan.",
-        ),
+        error:
+          detail !== null && detail.toLowerCase().includes("supabase")
+            ? "Gagal menyimpan riwayat obrolan. Periksa koneksi Supabase."
+            : ASSISTANT_ERROR_COPY.network,
+        code: "network",
+        retryable: true,
       },
-      { status: 500 },
+      { status: 502 },
     );
   }
 }

@@ -40,7 +40,7 @@ export default async function AssistenPage() {
         initialMessages={messages}
         hasApiKey={hasApiKey}
         todayKey={todayWIB()}
-        model={getGeminiModel()}
+        envModel={getGeminiModel()}
       />
     </>
   );
