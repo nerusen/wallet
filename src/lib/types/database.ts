@@ -29,7 +29,7 @@ export type TaskType = "freelance_project" | "wishlist_48h" | "career_task";
 
 export type TaskStatus = "backlog" | "in_progress" | "review" | "done";
 
-export interface Wallet {
+export type Wallet = {
   id: string;
   name: string;
   category: WalletCategory;
@@ -37,9 +37,9 @@ export interface Wallet {
   target_amount: number | null;
   accent_tag: AccentTag | null;
   created_at: string;
-}
+};
 
-export interface Transaction {
+export type Transaction = {
   id: string;
   tanggal: string; // ISO date, 'YYYY-MM-DD'
   hari: string;
@@ -54,9 +54,9 @@ export interface Transaction {
   is_frozen_freelance: boolean;
   catatan: string | null;
   created_at: string;
-}
+};
 
-export interface KanbanTask {
+export type KanbanTask = {
   id: string;
   title: string;
   task_type: TaskType;
@@ -67,16 +67,16 @@ export interface KanbanTask {
   notes: string | null;
   position: number;
   created_at: string;
-}
+};
 
-export interface DailyAudit {
+export type DailyAudit = {
   id: string;
   audit_date: string;
   evening_audit_done: boolean;
   monday_split_done: boolean;
   notes: string | null;
   created_at: string;
-}
+};
 
 /*
  * Insert types.
@@ -130,13 +130,29 @@ export type RealtimeTable = (typeof REALTIME_TABLES)[number];
 /**
  * Schema type consumed by `createClient<Database>()`.
  *
- * IMPORTANT: supabase-js v2 constrains each table against its internal
- * `GenericTable`, which requires a `Relationships` field. Omitting it makes a
- * table fail that constraint, which silently collapses the inferred schema and
- * resolves every `Row` to `never` — surfacing as confusing
- * "Property 'x' does not exist on type 'never'" errors at the call site rather
- * than here. `Relationships: []` declares no embedded-resource joins, which is
- * accurate: this app never uses `select('*, other(*)')` syntax.
+ * ─────────────────────────────────────────────────────────────────────────────
+ * READ BEFORE EDITING — three non-obvious requirements, each verified against
+ * supabase-js 2.45.4 and 2.119.0.
+ *
+ * 1. The `Row` types above MUST be `type` aliases, NOT `interface`.
+ *    supabase-js checks every table against its internal `GenericTable`, whose
+ *    `Row` is `Record<string, unknown>`. An `interface` has no implicit index
+ *    signature and therefore does NOT satisfy `Record<string, unknown>`; a
+ *    `type` alias for an object literal does. When the check fails, the schema
+ *    silently collapses and every row resolves to `never`, which surfaces as
+ *    "Property 'x' does not exist on type 'never'" at an unrelated call site
+ *    rather than here. This is the single easiest way to break this file.
+ *
+ * 2. Every table needs `Relationships`. It is required by `GenericTable`.
+ *    `[]` is accurate here: this app never uses embedded-resource selects
+ *    (`select('*, other(*)')`).
+ *
+ * 3. Empty sections use `{ [_ in never]: never }` — a mapped type over an empty
+ *    key union — which is what `supabase gen types typescript` emits.
+ *
+ * Regenerate with `npm run db:types` after changing the migration; the
+ * generated output already follows all three rules.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 export interface Database {
   public: {
@@ -166,15 +182,16 @@ export interface Database {
         Relationships: [];
       };
     };
-    Views: Record<string, never>;
+    /* Empty sections — see rule 3 in the block comment above. */
+    Views: { [_ in never]: never };
     Functions: {
       recalculate_wallet_balances: {
-        Args: Record<string, never>;
+        Args: { [_ in never]: never };
         Returns: undefined;
       };
     };
-    Enums: Record<string, never>;
-    CompositeTypes: Record<string, never>;
+    Enums: { [_ in never]: never };
+    CompositeTypes: { [_ in never]: never };
   };
 }
 
