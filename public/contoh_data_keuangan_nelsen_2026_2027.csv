@@ -1,0 +1,15 @@
+tanggal,tx_type,kategori,barang_keperluan,nominal,dompet,dompet_tujuan,is_frozen_freelance,catatan
+2026-11-16,income_salary,Gaji Utama,Gaji minggu ke-3 November,450000,Operasional Harian,,false,Contoh baris impor
+2026-11-16,expense,Kuota & Internet,Paket data 10GB,25000,Operasional Harian,,false,
+2026-11-17,expense,Konsumsi & Jajan,Makan siang warteg,12000,Operasional Harian,,false,
+2026-11-17,expense,Transportasi & Bensin,Bensin motor 1 liter,11000,Operasional Harian,,false,
+2026-11-18,expense,Rokok (Max 12rb/3hr),Rokok 1 bungkus,12000,Operasional Harian,,false,Kuota 3 hari dimulai
+2026-11-18,transfer,Transfer Antar Dompet,Top-up Investasi Pemula,50000,Operasional Harian,Investasi Pemula,false,
+2026-11-20,income_freelance,Proyek Desain,Desain logo & brand kit UMKM,750000,Kantong Freelance,,true,Klien: Toko Melati. Dibekukan sampai 2026-12-01
+2026-11-21,expense,Biaya Kerja / Lain-Lain,Cetak proposal klien,8000,Operasional Harian,,false,
+2026-11-23,income_salary,Part-Time,Shift part-time akhir pekan,180000,Operasional Harian,,false,
+2026-11-24,expense,Belanja Barang,Sabun & pasta gigi,18500,Operasional Harian,,false,
+2026-11-25,expense,Konsumsi & Jajan,Kopi sachet 1 pak,9000,Operasional Harian,,false,
+2026-11-30,income_salary,Gaji Utama,Gaji akhir November,450000,Dana Darurat,,false,
+2026-12-01,transfer,Pecah Freelance 70:30,Unlock proyek — 35% Tabungan Produktif,262500,Kantong Freelance,Tabungan Produktif,false,Bagian dari 70% Tabungan & Investasi
+2026-12-01,transfer,Pecah Freelance 70:30,Unlock proyek — 35% Investasi Pemula,262500,Kantong Freelance,Investasi Pemula,false,Sisa 30% jadi Self-Reward
