@@ -1,5 +1,9 @@
 import * as React from "react";
 
+import {
+  PageMetadataGrid,
+  type PageMetadataItem,
+} from "@/components/shell/page-metadata-grid";
 import { Eyebrow } from "@/components/ui/panel";
 import { cn } from "@/lib/utils";
 
@@ -22,8 +26,8 @@ export function PageHeader({
   title: string;
   description?: string;
   actions?: React.ReactNode;
-  /** Mono key/value pairs rendered on the trailing edge. */
-  meta?: readonly { label: string; value: string }[];
+  /** Mono key/value pairs rendered in the metadata strip below the header. */
+  meta?: readonly PageMetadataItem[];
   className?: string;
 }) {
   return (
@@ -47,22 +51,7 @@ export function PageHeader({
       </div>
 
       {meta !== undefined && meta.length > 0 && (
-        <dl className="flex flex-wrap border-t border-border">
-          {meta.map((item, index) => (
-            <div
-              key={item.label}
-              className={cn(
-                "flex min-w-[9rem] flex-1 flex-col gap-1 px-4 py-3 sm:px-6",
-                index > 0 && "border-l border-border",
-              )}
-            >
-              <dt className="eyebrow">{item.label}</dt>
-              <dd className="font-mono text-[13px] text-foreground tabular">
-                {item.value}
-              </dd>
-            </div>
-          ))}
-        </dl>
+        <PageMetadataGrid items={meta} />
       )}
     </div>
   );

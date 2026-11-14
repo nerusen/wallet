@@ -15,6 +15,7 @@ import { Panel, PanelHeader } from "@/components/ui/panel";
 import { SegmentedControl } from "@/components/ui/tabs";
 import { formatRupiah, formatRupiahCompact } from "@/lib/format";
 import { buildChartSeries, type ChartGranularity, type ChartPoint } from "@/lib/finance";
+import { cn } from "@/lib/utils";
 import type { Transaction } from "@/lib/types/database";
 
 /**
@@ -174,9 +175,21 @@ export function MountainChart({
       />
 
       {/* Legend rail */}
-      <div className="flex flex-wrap divide-grid-x border-b border-border">
-        {SERIES.map((series) => (
-          <div key={series.key} className="flex min-w-[10rem] flex-1 items-center gap-2.5 px-4 py-2.5">
+      {/*
+        Declared columns rather than flex-wrap: `divide-grid-x` only draws a
+        left rule on wrapped siblings, so a wrapped legend lost its horizontal
+        divider and gained a stray vertical stub.
+      */}
+      <div className="grid grid-cols-1 border-b border-border sm:grid-cols-3">
+        {SERIES.map((series, index) => (
+          <div
+            key={series.key}
+            className={cn(
+              "flex min-w-0 items-center gap-2.5 px-4 py-2.5",
+              index < SERIES.length - 1 && "border-b border-border sm:border-b-0",
+              index < SERIES.length - 1 && "sm:border-r sm:border-border",
+            )}
+          >
             <span
               aria-hidden
               className="h-0.5 w-4 shrink-0"

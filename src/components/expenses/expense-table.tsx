@@ -21,6 +21,7 @@ import {
   endOfWeek,
 } from "@/lib/format";
 import { sum } from "@/lib/finance";
+import { cn } from "@/lib/utils";
 import type { Transaction, Wallet } from "@/lib/types/database";
 
 /**
@@ -242,7 +243,12 @@ export function ExpenseTable({
       </div>
 
       {/* Subtotal rail */}
-      <dl className="flex flex-wrap border-b border-border">
+      {/*
+        Same deterministic 2x2 -> 1x4 lattice as the page metadata strip: a
+        flex-wrap rail would drop the horizontal rule between wrapped rows and
+        leave a stray vertical stub on the first cell of row 2.
+      */}
+      <dl className="grid grid-cols-2 border-b border-border sm:grid-cols-4">
         {[
           { label: "Subtotal Terfilter", value: subtotals.filtered, strong: true },
           { label: "Hari Ini", value: subtotals.today, strong: false },
@@ -251,9 +257,13 @@ export function ExpenseTable({
         ].map((item, index) => (
           <div
             key={item.label}
-            className={`flex min-w-[10rem] flex-1 flex-col gap-1.5 px-4 py-3 ${
-              index > 0 ? "border-l border-border" : ""
-            }`}
+            className={cn(
+              "flex min-w-0 flex-col gap-1.5 px-4 py-3",
+              index % 2 === 0 && "border-r border-border",
+              index < 2 && "border-b border-border",
+              index < 3 ? "sm:border-r sm:border-border" : "sm:border-r-0",
+              "sm:border-b-0",
+            )}
           >
             <dt className="eyebrow">{item.label}</dt>
             <dd
