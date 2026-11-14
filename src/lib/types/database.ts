@@ -78,16 +78,44 @@ export interface DailyAudit {
   created_at: string;
 }
 
+/*
+ * Insert types.
+ *
+ * Columns that the database fills itself are optional here, mirroring the
+ * migration's DEFAULTs and BEFORE-INSERT triggers:
+ *   • wallets.balance            → DEFAULT 0, then owned by sync_wallet_balances()
+ *   • transactions.hari/minggu_ke/bulan → derive_transaction_calendar()
+ *   • kanban_tasks.position/unlock_at   → prepare_kanban_task()
+ *   • daily_audits.*_done        → DEFAULT false
+ */
+
 export type WalletInsert = Omit<Wallet, "id" | "created_at" | "balance"> & {
   balance?: number;
 };
 
-export type TransactionInsert = Omit<Transaction, "id" | "created_at">;
+export type TransactionInsert = Omit<
+  Transaction,
+  "id" | "created_at" | "hari" | "minggu_ke" | "bulan" | "is_frozen_freelance"
+> & {
+  hari?: string;
+  minggu_ke?: number;
+  bulan?: string;
+  is_frozen_freelance?: boolean;
+};
 
 export type KanbanTaskInsert = Omit<
   KanbanTask,
   "id" | "created_at" | "position"
 > & { position?: number };
+
+export type DailyAuditInsert = Omit<
+  DailyAudit,
+  "id" | "created_at" | "evening_audit_done" | "monday_split_done" | "notes"
+> & {
+  evening_audit_done?: boolean;
+  monday_split_done?: boolean;
+  notes?: string | null;
+};
 
 /** Tables exposed on the `supabase_realtime` publication. */
 export const REALTIME_TABLES = [
@@ -99,6 +127,17 @@ export const REALTIME_TABLES = [
 
 export type RealtimeTable = (typeof REALTIME_TABLES)[number];
 
+/**
+ * Schema type consumed by `createClient<Database>()`.
+ *
+ * IMPORTANT: supabase-js v2 constrains each table against its internal
+ * `GenericTable`, which requires a `Relationships` field. Omitting it makes a
+ * table fail that constraint, which silently collapses the inferred schema and
+ * resolves every `Row` to `never` — surfacing as confusing
+ * "Property 'x' does not exist on type 'never'" errors at the call site rather
+ * than here. `Relationships: []` declares no embedded-resource joins, which is
+ * accurate: this app never uses `select('*, other(*)')` syntax.
+ */
 export interface Database {
   public: {
     Tables: {
@@ -106,28 +145,32 @@ export interface Database {
         Row: Wallet;
         Insert: WalletInsert;
         Update: Partial<WalletInsert>;
+        Relationships: [];
       };
       transactions: {
         Row: Transaction;
         Insert: TransactionInsert;
         Update: Partial<TransactionInsert>;
+        Relationships: [];
       };
       kanban_tasks: {
         Row: KanbanTask;
         Insert: KanbanTaskInsert;
         Update: Partial<KanbanTaskInsert>;
+        Relationships: [];
       };
       daily_audits: {
         Row: DailyAudit;
-        Insert: Omit<DailyAudit, "id" | "created_at">;
-        Update: Partial<Omit<DailyAudit, "id" | "created_at">>;
+        Insert: DailyAuditInsert;
+        Update: Partial<DailyAuditInsert>;
+        Relationships: [];
       };
     };
     Views: Record<string, never>;
     Functions: {
       recalculate_wallet_balances: {
         Args: Record<string, never>;
-        Returns: void;
+        Returns: undefined;
       };
     };
     Enums: Record<string, never>;
