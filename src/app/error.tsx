@@ -1,6 +1,7 @@
 "use client";
 
 import { RotateCcw } from "lucide-react";
+import Link from "next/link";
 
 import { Button, MotionButton } from "@/components/ui/button";
 import { Eyebrow } from "@/components/ui/panel";
@@ -56,7 +57,7 @@ export default function Error({
               Coba Lagi
             </MotionButton>
             <Button asChild variant="outline" size="sm">
-              <a href="/">Halaman Utama</a>
+              <Link href="/">Halaman Utama</Link>
             </Button>
           </div>
         </div>
