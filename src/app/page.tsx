@@ -650,7 +650,19 @@ const DB_GUARANTEES = [
   },
 ] as const;
 
-const SETUP_STEPS = [
+/**
+ * Explicitly typed so the optional `command` exists on every element.
+ * With a bare `as const`, TypeScript narrows each entry individually and the
+ * steps that have no command lack the property entirely, which makes
+ * `step.command` an error on the union.
+ */
+interface SetupStep {
+  title: string;
+  detail: string;
+  command?: string;
+}
+
+const SETUP_STEPS: readonly SetupStep[] = [
   {
     title: "Clone repositori dan pasang dependensi",
     detail: "Butuh Node.js 18.18 atau lebih baru.",
@@ -684,4 +696,4 @@ const SETUP_STEPS = [
       "Import repositori ke Vercel, tempelkan environment variable yang sama, lalu deploy. Tidak ada konfigurasi build tambahan yang diperlukan.",
     command: "vercel --prod",
   },
-] as const;
+];

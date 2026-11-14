@@ -88,22 +88,34 @@ Button.displayName = "Button";
 
 /**
  * Tactile press state (`whileTap={{ scale: 0.985 }}`) per the motion spec.
- * Use for primary brutalist actions; `Button` stays available for cases where
- * a plain element is required (e.g. inside a Radix `asChild` chain).
+ *
+ * Supports `asChild` so a motion button can wrap a `next/link` without
+ * nesting an <a> inside a <button> (invalid HTML). Radix `Slot` merges the
+ * props onto its child, and wrapping Slot in `motion()` keeps the tap
+ * animation while the rendered element stays an anchor.
+ *
+ * Verified: `variant`/`size` are destructured out and `whileTap`/`transition`
+ * are consumed by framer-motion, so none of them leak to the DOM.
  */
+const MotionSlot = motion.create(Slot);
+
 export type MotionButtonProps = Omit<HTMLMotionProps<"button">, "ref"> &
-  VariantProps<typeof buttonVariants>;
+  VariantProps<typeof buttonVariants> & { asChild?: boolean };
 
 const MotionButton = React.forwardRef<HTMLButtonElement, MotionButtonProps>(
-  ({ className, variant, size, ...props }, ref) => (
-    <motion.button
-      ref={ref}
-      whileTap={{ scale: 0.985 }}
-      transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
-      className={cn(buttonVariants({ variant, size }), className)}
-      {...props}
-    />
-  ),
+  ({ className, variant, size, asChild = false, ...props }, ref) => {
+    const Comp = asChild ? MotionSlot : motion.button;
+
+    return (
+      <Comp
+        ref={ref}
+        whileTap={{ scale: 0.985 }}
+        transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
+        className={cn(buttonVariants({ variant, size }), className)}
+        {...props}
+      />
+    );
+  },
 );
 MotionButton.displayName = "MotionButton";
 

@@ -11,8 +11,12 @@ import { cn } from "@/lib/utils";
  * The brief fixes the easing curve and durations, so they live here once and
  * every animated surface in the app reuses them. `prefers-reduced-motion` is
  * neutralised globally in globals.css.
+ *
+ * `BRUTAL_EASE` is typed as an explicit cubic-bezier tuple rather than
+ * `Transition["ease"]`: framer-motion 11's `Transition` is generic, so
+ * indexing it with `["ease"]` does not resolve.
  */
-export const BRUTAL_EASE: Transition["ease"] = [0.22, 1, 0.36, 1];
+export const BRUTAL_EASE: [number, number, number, number] = [0.22, 1, 0.36, 1];
 
 export const ENTRANCE_TRANSITION: Transition = {
   duration: 0.35,
